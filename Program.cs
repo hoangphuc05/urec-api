@@ -1,9 +1,16 @@
+using UREC_api;
+using Microsoft.EntityFrameworkCore;
+
+Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "urec-admin.json");
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// builder.Services.AddDbContext<UrecContext>(opt => opt.UseSqlite("Data Source=mydb.db;"));
+// builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 var app = builder.Build();
 
@@ -14,30 +21,58 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+app.MapGet("/", () => "Hello world");
 
-app.MapGet("/weatherforecast", () =>
+app.MapPost("/generateqr", async (UserFirebaseToken userToken) =>
 {
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-       new WeatherForecast
-       (
-           DateTime.Now.AddDays(index),
-           Random.Shared.Next(-20, 55),
-           summaries[Random.Shared.Next(summaries.Length)]
-       ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    var invalidTokenResponse = Results.ValidationProblem(new Dictionary<string, string[]>() { { "invalid token", new string[] { "The provided token cannot be verified" } } });
+    if (await userToken.CheckToken() == false)
+    {
+        //????
+        return invalidTokenResponse;
+    }
+
+    // get user information
+    var tokenInfo = await userToken.DecodeToken();
+    if (tokenInfo == null)
+        return invalidTokenResponse;
+
+    var student = new Student()
+    {
+        Uid = tokenInfo.Uid,
+        Name = tokenInfo.Claims["name"] as String,
+        Email = tokenInfo.Claims["email"] as String,
+    };
+    // generate QR-token and tied that to the information
+    var generatedToken = new QRToken(student);
+    
+    // save the QRtoken to the database
+    await UrecFirestore.AddToken(generatedToken);
+    // db.QRTokens.Add(generatedToken);
+    // await db.SaveChangesAsync();
+
+    //return QRtoken;
+    return Results.Json(generatedToken);
+    //return Results.ValidationProblem(new Dictionary<string, string[]>() { { "Error", new string[] { "Bruh" } } });
+});
+
+
+// verify token from the user
+app.MapPost("/verifyqr", async (QRTokenData token) =>
+{
+    var invalidTokenResponse = Results.ValidationProblem(new Dictionary<string, string[]>() { { "invalid token", new string[] { "The provided token cannot be verified" } } });
+
+    // verify the token against firebase
+    QRToken? comingQrToken = await UrecFirestore.VerifyToken(token.Token);
+
+    if (comingQrToken == null)
+        return invalidTokenResponse;
+    else
+        return Results.Json(comingQrToken);
+
+});
 
 app.Run();
 
-internal record WeatherForecast(DateTime Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
